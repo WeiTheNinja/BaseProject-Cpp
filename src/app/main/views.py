@@ -3,18 +3,27 @@ from . import main
 from .. import db
 from ..models import User, Role, Post, Permission, Post, Comment
 from flask_login import login_required, current_user
-from .forms import EditProfileForm, EditProfileAdminForm, PostForm, CommentForm
+from .forms import EditProfileForm, EditProfileAdminForm, PostForm, CommentForm, DelCommentForm
 from ..decorators import admin_required, permission_required
+import os
+from werkzeug.utils import secure_filename
 
 
 @main.route('/', methods=['GET', 'POST'])
 def index():
     form = PostForm()
     if current_user.can(Permission.WRITE) and form.validate_on_submit():
-        post = Post(body=form.body.data,
-                    author=current_user._get_current_object())
+
+        file = form.photo.data
+        if file is not None:
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(current_app.config['UPLOAD_FOLDER'],'photos', filename))
+            post = Post(body=form.body.data, photo=filename, author=current_user._get_current_object())
+        else:
+            post = Post(body=form.body.data, author=current_user._get_current_object())
         db.session.add(post)
         db.session.commit()
+        flash('已成功送出', 'success')
         return redirect(url_for('main.index'))
     return render_template('index.html', form=form)
 
@@ -73,6 +82,7 @@ def edit_profile_admin(id):
 def post(id):
     post = Post.query.get_or_404(id)
     form = CommentForm()
+    del_form = DelCommentForm()
     if form.validate_on_submit():
         comment = Comment(body=form.body.data,
                           post=post,
@@ -89,9 +99,17 @@ def post(id):
         page, per_page=current_app.config['FLASKY_COMMENTS_PER_PAGE'],
         error_out=False)
     comments = pagination.items
-    return render_template('post.html', posts=[post], form=form,
+    return render_template('post.html', posts=[post], form=form, del_form=del_form,
                            comments=comments, pagination=pagination)
 
+@main.route('/comment/<int:id>')
+def del_com(id):
+    comment = Comment.query.get_or_404(id)
+    post_id = comment.post_id
+    db.session.delete(comment)
+    db.session.commit()
+    flash('評論已刪除', 'success')
+    return redirect(url_for('main.post', id=post_id, page=-1))
 
 @main.route('/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -225,3 +243,11 @@ def show_followed():
     resp = make_response(redirect(url_for('main.post_all')))
     resp.set_cookie('show_followed_post', '1', max_age=30*24*60*60)
     return resp
+
+@main.route('/all_user/<username>')
+@login_required
+@permission_required(Permission.FOLLOW)
+def all_user(username):
+    user = User.query.filter_by(username=username).first()
+    users = User.query.all()
+    return render_template('all_user.html', user=user, users=users)
